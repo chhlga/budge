@@ -1,0 +1,28 @@
+From: Alice <alice@example.com>
+To: Bob <bob@example.com>
+Cc: charlie@example.com
+Subject: Multipart Alternative Email
+Date: Mon, 1 Jan 2024 12:00:00 +0000
+Message-ID: <multipart123@example.com>
+In-Reply-To: <previous@example.com>
+References: <thread1@example.com> <previous@example.com>
+MIME-Version: 1.0
+Content-Type: multipart/alternative; boundary="boundary123"
+
+--boundary123
+Content-Type: text/plain; charset=utf-8
+
+This is the plain text version.
+It should be used as fallback.
+
+--boundary123
+Content-Type: text/html; charset=utf-8
+
+<!DOCTYPE html>
+<html>
+<body>
+<p>This is the <strong>HTML</strong> version.</p>
+<p>It has <em>better formatting</em>.</p>
+</body>
+</html>
+--boundary123--

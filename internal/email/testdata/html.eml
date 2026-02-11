@@ -1,0 +1,19 @@
+From: sender@example.com
+To: recipient@example.com
+Subject: HTML Email
+Date: Mon, 1 Jan 2024 11:00:00 +0000
+Message-ID: <html123@example.com>
+Content-Type: text/html; charset=utf-8
+
+<!DOCTYPE html>
+<html>
+<head><title>Test</title></head>
+<body>
+<h1>HTML Email</h1>
+<p>This is an <strong>HTML</strong> email with <em>formatting</em>.</p>
+<ul>
+<li>Item 1</li>
+<li>Item 2</li>
+</ul>
+</body>
+</html>
