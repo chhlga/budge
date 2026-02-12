@@ -1,0 +1,50 @@
+# Sensitive configuration files
+config.yaml
+.env
+.env.*
+*.env
+
+# Build artifacts
+budge
+/bin/
+/dist/
+
+# Go build cache
+*.o
+*.a
+*.so
+
+# Test binaries
+*.test
+*.out
+
+# Coverage reports
+*.cover
+coverage.txt
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Linux
+*~
+.directory
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Editor/IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.project
+.classpath
+.settings/
+
+# Logs
+*.log
