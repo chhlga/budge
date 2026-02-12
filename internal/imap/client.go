@@ -125,7 +125,7 @@ func (c *Client) Disconnect() error {
 
 	if c.client != nil {
 		if err := c.client.Logout().Wait(); err != nil {
-			c.client.Close()
+			_ = c.client.Close() // Best effort close, ignore error after failed logout
 		}
 		c.client = nil
 	}
