@@ -47,6 +47,8 @@ type SearchQueryMsg struct {
 	Query string
 }
 
+type SearchCancelledMsg struct{}
+
 // ConnectionStateChangedMsg is sent when connection state changes
 type ConnectionStateChangedMsg struct {
 	State imap.ConnectionState
@@ -81,3 +83,9 @@ type StartIdleMonitoringMsg struct {
 
 // StopIdleMonitoringMsg stops monitoring for new emails
 type StopIdleMonitoringMsg struct{}
+
+type LoadingMsg struct {
+	Text string
+}
+
+type LoadingClearedMsg struct{}

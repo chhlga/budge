@@ -297,7 +297,7 @@ func deleteEmailCmd(client *imapClient.Client, uid uint32) tea.Cmd {
 	}
 }
 
-func searchEmailsCmd(client *imapClient.Client, query string) tea.Cmd {
+func searchEmailsCmd(client *imapClient.Client, mailbox, query string) tea.Cmd {
 	return func() tea.Msg {
 		if !client.IsConnected() {
 			return ErrorMsg{Err: fmt.Errorf("not connected to IMAP server")}
@@ -308,11 +308,13 @@ func searchEmailsCmd(client *imapClient.Client, query string) tea.Cmd {
 			return ErrorMsg{Err: fmt.Errorf("IMAP client not initialized")}
 		}
 
-		criteria := &imap.SearchCriteria{
-			Text: []string{query},
+		if _, err := imapConn.Select(mailbox, nil).Wait(); err != nil {
+			return ErrorMsg{Err: fmt.Errorf("failed to select mailbox %s for search: %w", mailbox, err)}
 		}
 
-		searchData, err := imapConn.Search(criteria, nil).Wait()
+		criteria := buildSearchCriteria(query)
+
+		searchData, err := imapConn.UIDSearch(criteria, nil).Wait()
 		if err != nil {
 			return ErrorMsg{Err: fmt.Errorf("search failed: %w", err)}
 		}
@@ -387,6 +389,23 @@ func searchEmailsCmd(client *imapClient.Client, query string) tea.Cmd {
 		}
 
 		return EmailsLoadedMsg{Emails: messages, Total: uint32(len(messages))}
+	}
+}
+
+func buildSearchCriteria(query string) *imap.SearchCriteria {
+	q := strings.TrimSpace(query)
+	if q == "" {
+		return &imap.SearchCriteria{}
+	}
+
+	return &imap.SearchCriteria{
+		Or: [][2]imap.SearchCriteria{{
+			{Header: []imap.SearchCriteriaHeaderField{{Key: "Subject", Value: q}}},
+			{Or: [][2]imap.SearchCriteria{{
+				{Header: []imap.SearchCriteriaHeaderField{{Key: "From", Value: q}}},
+				{Header: []imap.SearchCriteriaHeaderField{{Key: "To", Value: q}}},
+			}}},
+		}},
 	}
 }
 

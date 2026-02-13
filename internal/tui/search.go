@@ -55,8 +55,9 @@ func (s Search) Update(msg tea.Msg) (Search, tea.Cmd) {
 				}
 			}
 		case tea.KeyEsc:
-			s.textInput.SetValue("")
+			s.textInput.Reset()
 			s.textInput.Blur()
+			return s, func() tea.Msg { return SearchCancelledMsg{} }
 		}
 	}
 

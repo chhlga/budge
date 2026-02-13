@@ -42,6 +42,11 @@ type Model struct {
 	config     *config.Config
 
 	currentMailbox string
+	loading        bool
+	loadingText    string
+
+	inSearchResults     bool
+	preSearchEmailState EmailsLoadedMsg
 }
 
 // NewModel creates a new root model
@@ -147,13 +152,26 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		)
 	case EmailsLoadedMsg:
 		m.emailList.SetEmails(msg.Emails, msg.Total)
+		m.statusBar.SetHelpText("enter: read | s: sort | f: filter | m: mark | d: delete | /: search | q: quit")
 		return m, nil
 
 	case EmailSelectedMsg:
+		selectedEmail := msg.Email
+		if selectedEmail.IsUnread() {
+			selectedEmail.Flags = addFlag(selectedEmail.Flags, "\\Seen")
+			m.emailList.markSeenLocal(selectedEmail.UID, true)
+			if m.inSearchResults {
+				m.preSearchEmailState.Emails = markSeenInSlice(m.preSearchEmailState.Emails, selectedEmail.UID, true)
+			}
+		}
 		m.state = emailReaderView
 		m.statusBar.SetHelpText("2: back to list | q: quit")
-		m.emailReader.SetEmail(msg.Email)
-		return m, loadEmailBodyCmd(m.imapClient, m.cache, msg.Email.UID)
+		m.emailReader.SetEmail(selectedEmail)
+		cmds = append(cmds, loadEmailBodyCmd(m.imapClient, m.cache, selectedEmail.UID))
+		if msg.Email.IsUnread() {
+			cmds = append(cmds, markReadCmd(m.imapClient, selectedEmail.UID, true))
+		}
+		return m, tea.Batch(cmds...)
 
 	case EmailBodyLoadedMsg:
 		m.emailReader.SetBody(msg.Body)
@@ -166,9 +184,25 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, deleteEmailCmd(m.imapClient, msg.UID)
 
 	case SearchQueryMsg:
+		m.inSearchResults = true
+		m.preSearchEmailState = EmailsLoadedMsg{Emails: m.emailList.emails, Total: m.emailList.total}
 		m.state = emailListView
 		m.statusBar.SetHelpText("Searching...")
-		return m, searchEmailsCmd(m.imapClient, msg.Query)
+		if m.currentMailbox == "" {
+			m.currentMailbox = m.config.Behavior.DefaultFolder
+		}
+		return m, tea.Batch(
+			func() tea.Msg { return LoadingMsg{Text: "Searching..."} },
+			searchEmailsCmd(m.imapClient, m.currentMailbox, msg.Query),
+		)
+
+	case SearchCancelledMsg:
+		m.state = emailListView
+		m.emailList.ClearFilter()
+		m.inSearchResults = false
+		m.statusBar, cmd = m.statusBar.Update(LoadingClearedMsg{})
+		cmds = append(cmds, cmd)
+		return m, tea.Batch(cmds...)
 
 	case NewEmailMsg:
 		if msg.Mailbox == m.currentMailbox {
@@ -200,6 +234,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case mailboxListView:
 		m.mailboxList, cmd = m.mailboxList.Update(msg)
 	case emailListView:
+		if keyMsg, ok := msg.(tea.KeyMsg); ok && keyMsg.Type == tea.KeyEsc && m.inSearchResults {
+			m.inSearchResults = false
+			m.emailList.ClearFilter()
+			m.emailList.SetEmails(m.preSearchEmailState.Emails, m.preSearchEmailState.Total)
+			m.statusBar, cmd = m.statusBar.Update(LoadingClearedMsg{})
+			cmds = append(cmds, cmd)
+			return m, tea.Batch(cmds...)
+		}
 		m.emailList, cmd = m.emailList.Update(msg)
 	case emailReaderView:
 		m.emailReader, cmd = m.emailReader.Update(msg)
