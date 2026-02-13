@@ -2,11 +2,34 @@ package email
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/JohannesKaufmann/html-to-markdown"
 	"github.com/charmbracelet/glamour"
 )
+
+func sanitizeMarkdown(markdown string) string {
+	markdown = strings.ReplaceAll(markdown, "\r\n", "\n")
+
+	linkPattern := regexp.MustCompile(`\[(.*?)\]\s*\([^)]*\)`)
+	markdown = linkPattern.ReplaceAllString(markdown, "$1")
+
+	imagePattern := regexp.MustCompile(`!\[(.*?)\]\s*\([^)]*\)`)
+	markdown = imagePattern.ReplaceAllStringFunc(markdown, func(match string) string {
+		altText := imagePattern.FindStringSubmatch(match)[1]
+		if altText == "" {
+			return "[Image]"
+		}
+		return fmt.Sprintf("[Image: %s]", altText)
+	})
+
+	markdown = regexp.MustCompile(`\n{3,}`).ReplaceAllString(markdown, "\n\n")
+
+	markdown = regexp.MustCompile(`\n\s*\n`).ReplaceAllString(markdown, "\n\n")
+
+	return strings.TrimSpace(markdown)
+}
 
 // Render converts an email body to ANSI-formatted text
 // It tries HTML→Markdown→ANSI first, falls back to plain text
@@ -33,14 +56,14 @@ func Render(body *Body) (string, error) {
 }
 
 func renderHTML(html string) (string, error) {
-	// Convert HTML to Markdown
 	converter := md.NewConverter("", true, nil)
 	markdown, err := converter.ConvertString(html)
 	if err != nil {
 		return "", fmt.Errorf("failed to convert HTML to markdown: %w", err)
 	}
 
-	// Convert Markdown to ANSI with glamour
+	markdown = sanitizeMarkdown(markdown)
+
 	renderer, err := glamour.NewTermRenderer(
 		glamour.WithAutoStyle(),
 		glamour.WithWordWrap(80),

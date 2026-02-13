@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -53,6 +55,8 @@ func loadMailboxesCmd(client *imapClient.Client) tea.Cmd {
 		for _, mbox := range mailboxes {
 			names = append(names, mbox.Mailbox)
 		}
+
+		names = sortMailboxes(names)
 
 		return MailboxesLoadedMsg{Mailboxes: names}
 	}
@@ -402,4 +406,54 @@ func convertFlags(imapFlags []imap.Flag) []string {
 		flags[i] = string(flag)
 	}
 	return flags
+}
+
+func sortMailboxes(mailboxes []string) []string {
+	priorityOrder := []struct {
+		name    string
+		aliases []string
+	}{
+		{"INBOX", []string{"Inbox", "inbox", "INBOX"}},
+		{"Sent", []string{"Sent", "sent", "SENT", "Sent Messages", "[Gmail]/Sent Mail"}},
+		{"Drafts", []string{"Draft", "draft", "DRAFT", "Drafts", "DRAFTS", "[Gmail]/Drafts"}},
+		{"All Mail", []string{"All Mail", "all mail", "ALL MAIL", "All mail", "[Gmail]/All Mail"}},
+	}
+
+	used := make(map[string]bool)
+	var prioritized []string
+
+	for _, entry := range priorityOrder {
+		for _, name := range mailboxes {
+			if used[name] {
+				continue
+			}
+
+			for _, alias := range entry.aliases {
+				if strings.EqualFold(name, alias) {
+					prioritized = append(prioritized, name)
+					used[name] = true
+					break
+				}
+			}
+		}
+	}
+
+	var others []string
+	for _, name := range mailboxes {
+		if !used[name] {
+			others = append(others, name)
+		}
+	}
+
+	sort.Slice(others, func(i, j int) bool {
+		return strings.ToLower(others[i]) < strings.ToLower(others[j])
+	})
+
+	result := prioritized
+	if len(others) > 0 {
+		result = append(result, "---")
+		result = append(result, others...)
+	}
+
+	return result
 }
