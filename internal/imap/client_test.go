@@ -175,3 +175,51 @@ func TestClient_BackoffCalculation(t *testing.T) {
 		}
 	}
 }
+
+func TestUpdateHandler(t *testing.T) {
+	handler := &UpdateHandler{
+		Mailbox: "INBOX",
+	}
+
+	if handler.Mailbox != "INBOX" {
+		t.Errorf("Expected mailbox 'INBOX', got '%s'", handler.Mailbox)
+	}
+
+	handler.OnNewMail = func(mailbox string, count uint32) {
+		if mailbox != "INBOX" {
+			t.Errorf("Expected mailbox 'INBOX', got '%s'", mailbox)
+		}
+		if count != 5 {
+			t.Errorf("Expected count 5, got %d", count)
+		}
+	}
+
+	handler.OnNewMail("INBOX", 5)
+}
+
+func TestClient_UpdateHandler(t *testing.T) {
+	client := &Client{state: StateAuthenticated}
+
+	handler := &UpdateHandler{
+		Mailbox: "INBOX",
+	}
+
+	client.SetUpdateHandler(handler)
+
+	retrieved := client.GetUpdateHandler()
+	if retrieved == nil {
+		t.Fatal("Expected non-nil handler")
+	}
+	if retrieved.Mailbox != "INBOX" {
+		t.Errorf("Expected mailbox 'INBOX', got '%s'", retrieved.Mailbox)
+	}
+}
+
+func TestClient_UpdateHandlerNil(t *testing.T) {
+	client := &Client{state: StateAuthenticated}
+
+	retrieved := client.GetUpdateHandler()
+	if retrieved != nil {
+		t.Error("Expected nil handler when not set")
+	}
+}

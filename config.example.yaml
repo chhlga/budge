@@ -16,6 +16,7 @@ credentials:
 behavior:
   default_folder: INBOX        # Folder to open on startup
   page_size: 50                # Number of emails to fetch per page
+  poll_interval: 30            # Interval in seconds to check for new emails (push notification)
 
 display:
   date_format: "Jan 02 15:04"  # Go time format string

@@ -162,6 +162,17 @@ type EmailList struct {
 	filterMode FilterMode
 }
 
+func (e *EmailList) markSeenLocal(uid uint32, seen bool) {
+	e.emails = markSeenInSlice(e.emails, uid, seen)
+	e.applyFiltersAndSort()
+}
+
+func (e *EmailList) ClearFilter() {
+	e.filterMode = FilterNone
+	e.list.ResetFilter()
+	e.applyFiltersAndSort()
+}
+
 // NewEmailList creates a new email list view
 func NewEmailList(keys KeyMap) EmailList {
 	items := []list.Item{}

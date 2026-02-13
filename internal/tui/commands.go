@@ -4,7 +4,10 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"sort"
 	"strconv"
+	"strings"
+	"sync"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -53,6 +56,8 @@ func loadMailboxesCmd(client *imapClient.Client) tea.Cmd {
 		for _, mbox := range mailboxes {
 			names = append(names, mbox.Mailbox)
 		}
+
+		names = sortMailboxes(names)
 
 		return MailboxesLoadedMsg{Mailboxes: names}
 	}
@@ -292,7 +297,7 @@ func deleteEmailCmd(client *imapClient.Client, uid uint32) tea.Cmd {
 	}
 }
 
-func searchEmailsCmd(client *imapClient.Client, query string) tea.Cmd {
+func searchEmailsCmd(client *imapClient.Client, mailbox, query string) tea.Cmd {
 	return func() tea.Msg {
 		if !client.IsConnected() {
 			return ErrorMsg{Err: fmt.Errorf("not connected to IMAP server")}
@@ -303,11 +308,13 @@ func searchEmailsCmd(client *imapClient.Client, query string) tea.Cmd {
 			return ErrorMsg{Err: fmt.Errorf("IMAP client not initialized")}
 		}
 
-		criteria := &imap.SearchCriteria{
-			Text: []string{query},
+		if _, err := imapConn.Select(mailbox, nil).Wait(); err != nil {
+			return ErrorMsg{Err: fmt.Errorf("failed to select mailbox %s for search: %w", mailbox, err)}
 		}
 
-		searchData, err := imapConn.Search(criteria, nil).Wait()
+		criteria := buildSearchCriteria(query)
+
+		searchData, err := imapConn.UIDSearch(criteria, nil).Wait()
 		if err != nil {
 			return ErrorMsg{Err: fmt.Errorf("search failed: %w", err)}
 		}
@@ -385,6 +392,23 @@ func searchEmailsCmd(client *imapClient.Client, query string) tea.Cmd {
 	}
 }
 
+func buildSearchCriteria(query string) *imap.SearchCriteria {
+	q := strings.TrimSpace(query)
+	if q == "" {
+		return &imap.SearchCriteria{}
+	}
+
+	return &imap.SearchCriteria{
+		Or: [][2]imap.SearchCriteria{{
+			{Header: []imap.SearchCriteriaHeaderField{{Key: "Subject", Value: q}}},
+			{Or: [][2]imap.SearchCriteria{{
+				{Header: []imap.SearchCriteriaHeaderField{{Key: "From", Value: q}}},
+				{Header: []imap.SearchCriteriaHeaderField{{Key: "To", Value: q}}},
+			}}},
+		}},
+	}
+}
+
 func convertAddresses(imapAddrs []imap.Address) []email.Address {
 	addresses := make([]email.Address, len(imapAddrs))
 	for i, addr := range imapAddrs {
@@ -402,4 +426,128 @@ func convertFlags(imapFlags []imap.Flag) []string {
 		flags[i] = string(flag)
 	}
 	return flags
+}
+
+func sortMailboxes(mailboxes []string) []string {
+	priorityOrder := []struct {
+		name    string
+		aliases []string
+	}{
+		{"INBOX", []string{"Inbox", "inbox", "INBOX"}},
+		{"Sent", []string{"Sent", "sent", "SENT", "Sent Messages", "[Gmail]/Sent Mail"}},
+		{"Drafts", []string{"Draft", "draft", "DRAFT", "Drafts", "DRAFTS", "[Gmail]/Drafts"}},
+		{"All Mail", []string{"All Mail", "all mail", "ALL MAIL", "All mail", "[Gmail]/All Mail"}},
+	}
+
+	used := make(map[string]bool)
+	var prioritized []string
+
+	for _, entry := range priorityOrder {
+		for _, name := range mailboxes {
+			if used[name] {
+				continue
+			}
+
+			for _, alias := range entry.aliases {
+				if strings.EqualFold(name, alias) {
+					prioritized = append(prioritized, name)
+					used[name] = true
+					break
+				}
+			}
+		}
+	}
+
+	var others []string
+	for _, name := range mailboxes {
+		if !used[name] {
+			others = append(others, name)
+		}
+	}
+
+	sort.Slice(others, func(i, j int) bool {
+		return strings.ToLower(others[i]) < strings.ToLower(others[j])
+	})
+
+	result := prioritized
+	if len(others) > 0 {
+		result = append(result, "---")
+		result = append(result, others...)
+	}
+
+	return result
+}
+
+type emailMonitor struct {
+	client     *imapClient.Client
+	mailbox    string
+	previous   uint32
+	cancelChan chan struct{}
+}
+
+var activeMonitors = make(map[string]*emailMonitor)
+var monitorsMu sync.Mutex
+
+func startMonitoringCmd(client *imapClient.Client, mailbox string, interval time.Duration) tea.Cmd {
+	monitorsMu.Lock()
+	defer monitorsMu.Unlock()
+
+	key := mailbox
+
+	if monitor, exists := activeMonitors[key]; exists {
+		if monitor.cancelChan != nil {
+			close(monitor.cancelChan)
+		}
+	}
+
+	monitor := &emailMonitor{
+		client:     client,
+		mailbox:    mailbox,
+		cancelChan: make(chan struct{}),
+	}
+	activeMonitors[key] = monitor
+
+	initialCount, err := client.CheckForNewMessages(context.Background(), mailbox)
+	if err == nil {
+		monitor.previous = initialCount
+	}
+
+	return tea.Tick(interval, func(t time.Time) tea.Msg {
+		monitorsMu.Lock()
+		monitor, exists := activeMonitors[key]
+		if !exists {
+			monitorsMu.Unlock()
+			return nil
+		}
+		monitorsMu.Unlock()
+
+		select {
+		case <-monitor.cancelChan:
+			return nil
+		default:
+			currentCount, err := monitor.client.CheckForNewMessages(context.Background(), monitor.mailbox)
+			if err == nil && currentCount > monitor.previous {
+				monitor.previous = currentCount
+				return NewEmailMsg{Mailbox: monitor.mailbox, Count: currentCount}
+			}
+			return nil
+		}
+	})
+}
+
+func stopMonitoringCmd(mailbox string) tea.Cmd {
+	return func() tea.Msg {
+		monitorsMu.Lock()
+		defer monitorsMu.Unlock()
+
+		key := mailbox
+		if monitor, exists := activeMonitors[key]; exists {
+			if monitor.cancelChan != nil {
+				close(monitor.cancelChan)
+			}
+			delete(activeMonitors, key)
+		}
+
+		return nil
+	}
 }

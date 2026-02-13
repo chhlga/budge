@@ -3,12 +3,15 @@ package tui
 import (
 	"fmt"
 	"io"
+	"strings"
 
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
+
+var separatorStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
 
 // mailboxItem implements list.Item interface
 type mailboxItem struct {
@@ -17,7 +20,7 @@ type mailboxItem struct {
 
 func (m mailboxItem) Title() string       { return m.name }
 func (m mailboxItem) Description() string { return "" }
-func (m mailboxItem) FilterValue() string { return m.name }
+func (m mailboxItem) FilterValue() string { return "" }
 
 // mailboxDelegate handles rendering of mailbox items
 type mailboxDelegate struct{}
@@ -27,6 +30,13 @@ func (d mailboxDelegate) Spacing() int                            { return 0 }
 func (d mailboxDelegate) Update(_ tea.Msg, _ *list.Model) tea.Cmd { return nil }
 func (d mailboxDelegate) Render(w io.Writer, m list.Model, index int, item list.Item) {
 	mailbox := item.(mailboxItem)
+	isSeparator := strings.HasPrefix(mailbox.name, "---")
+
+	if isSeparator {
+		fmt.Fprint(w, separatorStyle.Render("  ─────────────────"))
+		return
+	}
+
 	str := mailbox.name
 
 	if index == m.Index() {
@@ -90,8 +100,10 @@ func (m MailboxList) Update(msg tea.Msg) (MailboxList, tea.Cmd) {
 		case key.Matches(msg, m.keys.Enter):
 			if selected := m.list.SelectedItem(); selected != nil {
 				mailbox := selected.(mailboxItem)
-				return m, func() tea.Msg {
-					return MailboxSelectedMsg{Mailbox: mailbox.name}
+				if !strings.HasPrefix(mailbox.name, "---") {
+					return m, func() tea.Msg {
+						return MailboxSelectedMsg{Mailbox: mailbox.name}
+					}
 				}
 			}
 		}

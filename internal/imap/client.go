@@ -11,6 +11,12 @@ import (
 	"github.com/emersion/go-imap/v2/imapclient"
 )
 
+type UpdateHandler struct {
+	OnNewMail func(mailbox string, count uint32)
+	OnExpunge func(mailbox string, seqNum uint32)
+	Mailbox   string
+}
+
 type ConnectionState int
 
 const (
@@ -21,10 +27,11 @@ const (
 )
 
 type Client struct {
-	mu     sync.RWMutex
-	client *imapclient.Client
-	state  ConnectionState
-	opts   *Options
+	mu            sync.RWMutex
+	client        *imapclient.Client
+	state         ConnectionState
+	opts          *Options
+	updateHandler *UpdateHandler
 }
 
 type Options struct {
@@ -192,4 +199,67 @@ func (c *Client) Client() *imapclient.Client {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.client
+}
+
+// SetUpdateHandler sets the update handler for receiving push notifications
+func (c *Client) SetUpdateHandler(handler *UpdateHandler) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.updateHandler = handler
+}
+
+// GetUpdateHandler returns the current update handler
+func (c *Client) GetUpdateHandler() *UpdateHandler {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.updateHandler
+}
+
+// MonitorMailbox starts monitoring the current mailbox for updates
+func (c *Client) MonitorMailbox(ctx context.Context, mailbox string, interval time.Duration) {
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+
+		var prevCount uint32
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if c.client == nil || c.state != StateAuthenticated {
+					continue
+				}
+
+				selectData, err := c.client.Select(mailbox, nil).Wait()
+				if err != nil {
+					continue
+				}
+
+				currentCount := selectData.NumMessages
+				handler := c.GetUpdateHandler()
+				if handler != nil && currentCount > prevCount {
+					handler.OnNewMail(mailbox, currentCount)
+				}
+				prevCount = currentCount
+			}
+		}
+	}()
+}
+
+// CheckForNewMessages checks if there are new messages in the specified mailbox
+func (c *Client) CheckForNewMessages(ctx context.Context, mailbox string) (uint32, error) {
+	c.mu.RLock()
+	if c.client == nil {
+		c.mu.RUnlock()
+		return 0, ErrNotConnected
+	}
+	c.mu.RUnlock()
+
+	selectData, err := c.client.Select(mailbox, nil).Wait()
+	if err != nil {
+		return 0, fmt.Errorf("failed to select mailbox: %w", err)
+	}
+
+	return selectData.NumMessages, nil
 }
