@@ -33,6 +33,7 @@ type CredentialsConfig struct {
 type BehaviorConfig struct {
 	DefaultFolder string `yaml:"default_folder"`
 	PageSize      int    `yaml:"page_size"`
+	PollInterval  int    `yaml:"poll_interval"`
 }
 
 // DisplayConfig contains display preferences
@@ -59,6 +60,9 @@ func Load(path string) (*Config, error) {
 	}
 	if cfg.Behavior.PageSize == 0 {
 		cfg.Behavior.PageSize = 50
+	}
+	if cfg.Behavior.PollInterval == 0 {
+		cfg.Behavior.PollInterval = 30
 	}
 	if cfg.Display.DateFormat == "" {
 		cfg.Display.DateFormat = "Jan 02 15:04"

@@ -67,3 +67,17 @@ type MarkReadRequestMsg struct {
 type DeleteEmailRequestMsg struct {
 	UID uint32
 }
+
+// NewEmailMsg is sent when new emails are detected via push notification
+type NewEmailMsg struct {
+	Mailbox string
+	Count   uint32
+}
+
+// StartIdleMonitoringMsg starts monitoring mailbox for new emails
+type StartIdleMonitoringMsg struct {
+	Mailbox string
+}
+
+// StopIdleMonitoringMsg stops monitoring for new emails
+type StopIdleMonitoringMsg struct{}

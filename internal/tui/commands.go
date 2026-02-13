@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -456,4 +457,78 @@ func sortMailboxes(mailboxes []string) []string {
 	}
 
 	return result
+}
+
+type emailMonitor struct {
+	client     *imapClient.Client
+	mailbox    string
+	previous   uint32
+	cancelChan chan struct{}
+}
+
+var activeMonitors = make(map[string]*emailMonitor)
+var monitorsMu sync.Mutex
+
+func startMonitoringCmd(client *imapClient.Client, mailbox string, interval time.Duration) tea.Cmd {
+	monitorsMu.Lock()
+	defer monitorsMu.Unlock()
+
+	key := mailbox
+
+	if monitor, exists := activeMonitors[key]; exists {
+		if monitor.cancelChan != nil {
+			close(monitor.cancelChan)
+		}
+	}
+
+	monitor := &emailMonitor{
+		client:     client,
+		mailbox:    mailbox,
+		cancelChan: make(chan struct{}),
+	}
+	activeMonitors[key] = monitor
+
+	initialCount, err := client.CheckForNewMessages(context.Background(), mailbox)
+	if err == nil {
+		monitor.previous = initialCount
+	}
+
+	return tea.Tick(interval, func(t time.Time) tea.Msg {
+		monitorsMu.Lock()
+		monitor, exists := activeMonitors[key]
+		if !exists {
+			monitorsMu.Unlock()
+			return nil
+		}
+		monitorsMu.Unlock()
+
+		select {
+		case <-monitor.cancelChan:
+			return nil
+		default:
+			currentCount, err := monitor.client.CheckForNewMessages(context.Background(), monitor.mailbox)
+			if err == nil && currentCount > monitor.previous {
+				monitor.previous = currentCount
+				return NewEmailMsg{Mailbox: monitor.mailbox, Count: currentCount}
+			}
+			return nil
+		}
+	})
+}
+
+func stopMonitoringCmd(mailbox string) tea.Cmd {
+	return func() tea.Msg {
+		monitorsMu.Lock()
+		defer monitorsMu.Unlock()
+
+		key := mailbox
+		if monitor, exists := activeMonitors[key]; exists {
+			if monitor.cancelChan != nil {
+				close(monitor.cancelChan)
+			}
+			delete(activeMonitors, key)
+		}
+
+		return nil
+	}
 }

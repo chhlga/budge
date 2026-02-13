@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"time"
+
 	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -38,6 +40,8 @@ type Model struct {
 	imapClient *imap.Client
 	cache      *cache.Cache
 	config     *config.Config
+
+	currentMailbox string
 }
 
 // NewModel creates a new root model
@@ -84,10 +88,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case key.Matches(msg, m.keys.ViewMailboxes):
 			m.state = mailboxListView
 			m.statusBar.SetHelpText("enter: select | r: refresh | q: quit")
-			return m, nil
+			return m, stopMonitoringCmd(m.currentMailbox)
 		case key.Matches(msg, m.keys.ViewEmails):
 			m.state = emailListView
 			m.statusBar.SetHelpText("enter: read | s: sort | f: filter | m: mark | d: delete | /: search | q: quit")
+			if m.currentMailbox != "" {
+				interval := time.Duration(m.config.Behavior.PollInterval) * time.Second
+				return m, startMonitoringCmd(m.imapClient, m.currentMailbox, interval)
+			}
 			return m, nil
 		case key.Matches(msg, m.keys.ViewReader):
 			m.state = emailReaderView
@@ -130,8 +138,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.state = emailListView
 		m.statusBar.SetHelpText("enter: read | s: sort | f: filter | m: mark | d: delete | /: search | q: quit")
 		m.emailList.SetMailbox(msg.Mailbox)
-		return m, loadEmailsCmd(m.imapClient, msg.Mailbox, uint32(m.config.Behavior.PageSize))
+		m.currentMailbox = msg.Mailbox
 
+		interval := time.Duration(m.config.Behavior.PollInterval) * time.Second
+		return m, tea.Batch(
+			loadEmailsCmd(m.imapClient, msg.Mailbox, uint32(m.config.Behavior.PageSize)),
+			startMonitoringCmd(m.imapClient, msg.Mailbox, interval),
+		)
 	case EmailsLoadedMsg:
 		m.emailList.SetEmails(msg.Emails, msg.Total)
 		return m, nil
@@ -156,6 +169,26 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.state = emailListView
 		m.statusBar.SetHelpText("Searching...")
 		return m, searchEmailsCmd(m.imapClient, msg.Query)
+
+	case NewEmailMsg:
+		if msg.Mailbox == m.currentMailbox {
+			return m, loadEmailsCmd(m.imapClient, msg.Mailbox, uint32(m.config.Behavior.PageSize))
+		}
+		return m, nil
+
+	case StartIdleMonitoringMsg:
+		if msg.Mailbox != "" {
+			m.currentMailbox = msg.Mailbox
+			interval := time.Duration(m.config.Behavior.PollInterval) * time.Second
+			return m, startMonitoringCmd(m.imapClient, msg.Mailbox, interval)
+		}
+		return m, nil
+
+	case StopIdleMonitoringMsg:
+		if m.currentMailbox != "" {
+			return m, stopMonitoringCmd(m.currentMailbox)
+		}
+		return m, nil
 	}
 
 	// Update status bar
