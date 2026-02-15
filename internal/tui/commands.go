@@ -489,6 +489,10 @@ var activeMonitors = make(map[string]*emailMonitor)
 var monitorsMu sync.Mutex
 
 func startMonitoringCmd(client *imapClient.Client, mailbox string, interval time.Duration) tea.Cmd {
+	if client == nil || mailbox == "" {
+		return nil
+	}
+
 	monitorsMu.Lock()
 	defer monitorsMu.Unlock()
 

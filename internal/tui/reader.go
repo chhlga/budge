@@ -36,12 +36,13 @@ func (r *EmailReader) SetSize(width, height int) {
 
 	if !r.ready {
 		r.viewport = viewport.New(width, height-headerHeight-footerHeight)
-		r.viewport.YPosition = headerHeight
+		r.viewport.YPosition = 0
 		r.viewport.MouseWheelEnabled = true
 		r.ready = true
 	} else {
 		r.viewport.Width = width
 		r.viewport.Height = height - headerHeight - footerHeight
+		r.viewport.YPosition = 0
 	}
 }
 

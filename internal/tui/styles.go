@@ -40,4 +40,9 @@ var (
 
 	ReadStyle = lipgloss.NewStyle().
 			Foreground(dimColor)
+
+	HeaderStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.AdaptiveColor{Light: "#343433", Dark: "#C1C6B2"}).
+			Background(lipgloss.AdaptiveColor{Light: "#D9DCCF", Dark: "#353533"}).
+			Padding(0, 1)
 )
