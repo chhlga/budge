@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/charmbracelet/bubbles/key"
@@ -28,6 +29,7 @@ type Model struct {
 	width  int
 	height int
 	err    error
+	focus  paneFocus
 
 	// Sub-models
 	mailboxList MailboxList
@@ -49,6 +51,13 @@ type Model struct {
 	preSearchEmailState EmailsLoadedMsg
 }
 
+type paneFocus uint
+
+const (
+	focusLeft paneFocus = iota
+	focusRight
+)
+
 // NewModel creates a new root model
 func NewModel(cfg *config.Config, client *imap.Client) Model {
 	keys := NewKeyMap()
@@ -64,6 +73,7 @@ func NewModel(cfg *config.Config, client *imap.Client) Model {
 		imapClient:  client,
 		cache:       cache.New(100), // Cache 100 email bodies
 		config:      cfg,
+		focus:       focusRight,
 	}
 }
 
@@ -86,16 +96,44 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// Global message handling
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
+		switch msg.Type {
+		case tea.KeyTab:
+			if m.focus == focusLeft {
+				m.focus = focusRight
+			} else {
+				m.focus = focusLeft
+			}
+			return m, nil
+		}
+
+		switch msg.String() {
+		case "h":
+			m.focus = focusLeft
+			return m, nil
+		case "l":
+			m.focus = focusRight
+			return m, nil
+		}
+
+		if msg.Type == tea.KeyEsc && m.state == emailReaderView {
+			m.state = emailListView
+			m.focus = focusRight
+			m.statusBar.SetHelpText("enter: read | s: sort | f: filter | m: mark | d: delete | /: search | q: quit")
+			return m, nil
+		}
+
 		// Global keys (always active)
 		switch {
 		case key.Matches(msg, m.keys.Quit):
 			return m, tea.Quit
 		case key.Matches(msg, m.keys.ViewMailboxes):
-			m.state = mailboxListView
-			m.statusBar.SetHelpText("enter: select | r: refresh | q: quit")
-			return m, stopMonitoringCmd(m.currentMailbox)
+			m.state = emailListView
+			m.focus = focusLeft
+			m.statusBar.SetHelpText("enter: select | /: search | q: quit")
+			return m, nil
 		case key.Matches(msg, m.keys.ViewEmails):
 			m.state = emailListView
+			m.focus = focusRight
 			m.statusBar.SetHelpText("enter: read | s: sort | f: filter | m: mark | d: delete | /: search | q: quit")
 			if m.currentMailbox != "" {
 				interval := time.Duration(m.config.Behavior.PollInterval) * time.Second
@@ -103,11 +141,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		case key.Matches(msg, m.keys.ViewReader):
-			m.state = emailReaderView
+			if m.emailReader.email != nil {
+				m.state = emailReaderView
+				m.focus = focusRight
+			}
 			m.statusBar.SetHelpText("2: back to list | q: quit")
 			return m, nil
 		case key.Matches(msg, m.keys.Search):
 			m.state = searchView
+			m.focus = focusRight
 			m.statusBar.SetHelpText("enter: search | esc: cancel")
 			return m, nil
 		}
@@ -117,12 +159,30 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		// Propagate size to all sub-models
 		statusBarHeight := 1
-		availableHeight := m.height - statusBarHeight
+		headerHeight := 1
+		availableHeight := m.height - statusBarHeight - headerHeight
 
-		m.mailboxList.SetSize(m.width, availableHeight)
-		m.emailList.SetSize(m.width, availableHeight)
-		m.emailReader.SetSize(m.width, availableHeight)
-		m.search.SetSize(m.width, availableHeight)
+		mailboxWidth := clampInt(m.width/4, 24, 40)
+		emailListWidth := clampInt((m.width*2)/5, 40, 60)
+		rightWidth := m.width - mailboxWidth
+
+		switch m.state {
+		case emailReaderView:
+			m.emailList.SetSize(emailListWidth, availableHeight)
+			m.emailReader.SetSize(m.width-emailListWidth, availableHeight)
+			m.mailboxList.SetSize(mailboxWidth, availableHeight)
+			m.search.SetSize(rightWidth, availableHeight)
+		case searchView:
+			m.mailboxList.SetSize(mailboxWidth, availableHeight)
+			m.search.SetSize(rightWidth, availableHeight)
+			m.emailList.SetSize(rightWidth, availableHeight)
+			m.emailReader.SetSize(rightWidth, availableHeight)
+		default:
+			m.mailboxList.SetSize(mailboxWidth, availableHeight)
+			m.emailList.SetSize(rightWidth, availableHeight)
+			m.emailReader.SetSize(rightWidth, availableHeight)
+			m.search.SetSize(rightWidth, availableHeight)
+		}
 		m.statusBar.SetSize(m.width)
 
 	case ErrorMsg:
@@ -135,12 +195,23 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			loadMailboxesCmd(m.imapClient),
 		)
 
+	case MailboxesLoadedMsg:
+		m.mailboxList.SetMailboxes(msg.Mailboxes)
+		if m.currentMailbox == "" {
+			defaultMailbox := pickDefaultMailbox(msg.Mailboxes, m.config.Behavior.DefaultFolder)
+			if defaultMailbox != "" {
+				return m, func() tea.Msg { return MailboxSelectedMsg{Mailbox: defaultMailbox} }
+			}
+		}
+		return m, nil
+
 	case ConnectErrorMsg:
 		m.err = msg.Err
 		return m, nil
 
 	case MailboxSelectedMsg:
 		m.state = emailListView
+		m.focus = focusRight
 		m.statusBar.SetHelpText("enter: read | s: sort | f: filter | m: mark | d: delete | /: search | q: quit")
 		m.emailList.SetMailbox(msg.Mailbox)
 		m.currentMailbox = msg.Mailbox
@@ -242,11 +313,23 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmds = append(cmds, cmd)
 			return m, tea.Batch(cmds...)
 		}
-		m.emailList, cmd = m.emailList.Update(msg)
+		if m.focus == focusLeft {
+			m.mailboxList, cmd = m.mailboxList.Update(msg)
+		} else {
+			m.emailList, cmd = m.emailList.Update(msg)
+		}
 	case emailReaderView:
-		m.emailReader, cmd = m.emailReader.Update(msg)
+		if m.focus == focusLeft {
+			m.emailList, cmd = m.emailList.Update(msg)
+		} else {
+			m.emailReader, cmd = m.emailReader.Update(msg)
+		}
 	case searchView:
-		m.search, cmd = m.search.Update(msg)
+		if m.focus == focusLeft {
+			m.mailboxList, cmd = m.mailboxList.Update(msg)
+		} else {
+			m.search, cmd = m.search.Update(msg)
+		}
 	}
 	cmds = append(cmds, cmd)
 
@@ -268,24 +351,74 @@ func (m Model) View() string {
 		)
 	}
 
-	// Render active view
-	var mainView string
-	switch m.state {
-	case mailboxListView:
-		mainView = m.mailboxList.View()
-	case emailListView:
-		mainView = m.emailList.View()
-	case emailReaderView:
-		mainView = m.emailReader.View()
-	case searchView:
-		mainView = m.search.View()
-	default:
-		mainView = "Unknown view"
+	statusBarHeight := 1
+	headerHeight := 1
+	contentHeight := clampInt(m.height-statusBarHeight-headerHeight, 0, m.height)
+
+	header := HeaderStyle.Copy().
+		Width(m.width).
+		MaxWidth(m.width).
+		Height(headerHeight).
+		MaxHeight(headerHeight).
+		Render(m.breadcrumb())
+
+	mainView := lipgloss.NewStyle().
+		Height(contentHeight).
+		MaxHeight(contentHeight).
+		Render(m.mainView(contentHeight))
+
+	return lipgloss.JoinVertical(lipgloss.Left, header, mainView, m.statusBar.View())
+}
+
+func (m Model) breadcrumb() string {
+	if m.currentMailbox == "" {
+		return "Mailboxes"
 	}
 
-	// Combine main view with status bar
-	return lipgloss.JoinVertical(lipgloss.Left,
-		mainView,
-		m.statusBar.View(),
-	)
+	suffix := ""
+	switch m.state {
+	case searchView:
+		suffix = "  > Search"
+	case emailReaderView:
+		suffix = "  > Reader"
+	default:
+		suffix = "  > Emails"
+	}
+
+	focus := "right"
+	if m.focus == focusLeft {
+		focus = "left"
+	}
+
+	return fmt.Sprintf("%s%s  (focus: %s)", m.currentMailbox, suffix, focus)
+}
+
+func (m Model) mainView(contentHeight int) string {
+	mailboxWidth := clampInt(m.width/4, 24, 40)
+	emailListWidth := clampInt((m.width*2)/5, 40, 60)
+	rightWidth := m.width - mailboxWidth
+
+	leftFocusStyle := SelectedItemStyle
+	rightFocusStyle := SelectedItemStyle
+	if m.focus != focusLeft {
+		leftFocusStyle = ReadStyle
+	}
+	if m.focus != focusRight {
+		rightFocusStyle = ReadStyle
+	}
+
+	switch m.state {
+	case emailReaderView:
+		left := leftFocusStyle.Copy().Width(emailListWidth).MaxWidth(emailListWidth).Height(contentHeight).MaxHeight(contentHeight).Render(m.emailList.View())
+		right := rightFocusStyle.Copy().Width(m.width - emailListWidth).MaxWidth(m.width - emailListWidth).Height(contentHeight).MaxHeight(contentHeight).Render(m.emailReader.View())
+		return lipgloss.JoinHorizontal(lipgloss.Top, left, right)
+	case searchView:
+		left := leftFocusStyle.Copy().Width(mailboxWidth).MaxWidth(mailboxWidth).Height(contentHeight).MaxHeight(contentHeight).Render(m.mailboxList.View())
+		right := rightFocusStyle.Copy().Width(rightWidth).MaxWidth(rightWidth).Height(contentHeight).MaxHeight(contentHeight).Render(m.search.View())
+		return lipgloss.JoinHorizontal(lipgloss.Top, left, right)
+	default:
+		left := leftFocusStyle.Copy().Width(mailboxWidth).MaxWidth(mailboxWidth).Height(contentHeight).MaxHeight(contentHeight).Render(m.mailboxList.View())
+		right := rightFocusStyle.Copy().Width(rightWidth).MaxWidth(rightWidth).Height(contentHeight).MaxHeight(contentHeight).Render(m.emailList.View())
+		return lipgloss.JoinHorizontal(lipgloss.Top, left, right)
+	}
 }

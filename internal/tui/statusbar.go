@@ -6,6 +6,8 @@ import (
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/muesli/reflow/ansi"
+	"github.com/muesli/reflow/truncate"
 )
 
 type StatusBar struct {
@@ -91,11 +93,35 @@ func (s *StatusBar) View() string {
 
 	right := s.helpText
 
-	leftStyle := StatusBarStyle.Copy().Width(s.width / 2)
-	rightStyle := StatusBarStyle.Copy().Width(s.width / 2).Align(lipgloss.Right)
+	half := s.width / 2
+	contentWidth := half - 2
+	if contentWidth < 0 {
+		contentWidth = 0
+	}
 
-	return lipgloss.JoinHorizontal(lipgloss.Top,
+	left = truncateString(left, contentWidth)
+	right = truncateString(right, contentWidth)
+
+	leftStyle := StatusBarStyle.Copy().Width(half).Height(1).MaxHeight(1)
+	rightStyle := StatusBarStyle.Copy().Width(half).Height(1).MaxHeight(1).Align(lipgloss.Right)
+
+	bar := lipgloss.JoinHorizontal(lipgloss.Top,
 		leftStyle.Render(left),
 		rightStyle.Render(right),
 	)
+
+	return lipgloss.NewStyle().Height(1).MaxHeight(1).Render(bar)
+}
+
+func truncateString(s string, max int) string {
+	if max <= 0 {
+		return ""
+	}
+	if ansi.PrintableRuneWidth(s) <= max {
+		return s
+	}
+	if max == 1 {
+		return "…"
+	}
+	return truncate.StringWithTail(s, uint(max), "…")
 }
